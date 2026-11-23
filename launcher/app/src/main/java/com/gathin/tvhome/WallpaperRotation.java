@@ -13,9 +13,22 @@ final class WallpaperRotation {
     /** Playback orders persisted in config.json (wallpaper_order). */
     static final String ORDER_SEQUENTIAL = "sequential";
     static final String ORDER_SHUFFLE = "shuffle";
+    /** The picture follows the clock: the same one for everyone at a given time, whatever Home was doing before. */
+    static final String ORDER_CLOCK = "clock";
 
     static boolean validOrder(String order) {
-        return ORDER_SEQUENTIAL.equals(order) || ORDER_SHUFFLE.equals(order);
+        return ORDER_SEQUENTIAL.equals(order) || ORDER_SHUFFLE.equals(order) || ORDER_CLOCK.equals(order);
+    }
+
+    /**
+     * ORDER_CLOCK: the picture for this moment. Time is cut into slots of {@code interval} counted from the epoch in
+     * local time, so a 30-minute collection changes at :00 and :30, and the slot's number picks the picture. The TV
+     * being off, in standby or in another app changes nothing: Home shows the current slot's picture when it is seen.
+     */
+    static File byClock(List<File> images, long nowMillis, long offsetMillis, long interval) {
+        if (images.isEmpty() || interval <= 0) return null;
+        long slot = Math.floorDiv(nowMillis + offsetMillis, interval);
+        return images.get((int) Math.floorMod(slot, (long) images.size()));
     }
 
     static List<File> images(File directory) {

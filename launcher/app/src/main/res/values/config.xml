@@ -18,9 +18,9 @@
     <!-- Apps pinned to the dock row at the bottom, in this order. Missing apps are skipped. -->
     <string-array name="dock_apps">
         <item>com.netflix.ninja</item>
-        <item>com.amazon.amazonvideo.livingroom</item>
         <item>com.google.android.youtube.tv</item>
-        <item>in.startv.hotstar</item>
+        <item>com.amazon.amazonvideo.livingroom</item>
+        <item>com.apple.atve.androidtv.appletv</item>
     </string-array>
     <!-- With fewer dock_apps than columns (or a dock app that is not installed), the free dock slots take
          the first grid apps, so the dock never shows a gap. false leaves them empty (#162); a theme can
@@ -186,7 +186,7 @@
          stock launcher is disabled even with InputKeyService on (Hisense huangshan, Android TV 10: no
          global_keys.xml, no vendor input picker). Off by default: a TV with its own input picker would otherwise
          get a chooser on every press. Also "handle_view_inputs": true in a theme's config.json. -->
-    <bool name="handle_view_inputs">false</bool>
+    <bool name="handle_view_inputs">true</bool>
     <!-- Remote buttons that open an app, as "keycode:package" or "KEYCODE_NAME:package" (INPUT_KEY_SERVICE=1 or
          HOME_KEY_SERVICE=1; both read this one list, and a theme's config.json can set it too). On Google TV the
          YouTube button sends 190 (KEYCODE_BUTTON_3) to the stock launcher, so it does nothing once launcherx
@@ -460,8 +460,8 @@
     <!-- Where the TV is, in decimal degrees, so the sky's sunrise and sunset glows follow the real sun
          (computed on the TV, no network). Empty: a fixed temperate day, sunset glow around 19:00.
          Vilnius: 54.69 and 25.28. -->
-    <string name="latitude" translatable="false"></string>
-    <string name="longitude" translatable="false"></string>
+    <string name="latitude" translatable="false">52.52</string>
+    <string name="longitude" translatable="false">13.41</string>
 
     <!-- Cinematic top shelf: the focused dock app's artwork, softened, fills the top of the screen in its
          colour; the shelf gets a larger name, a "Last opened" line (from the apps Home opened) and dock position
@@ -502,6 +502,45 @@
          home_idle_clock_minutes). Back keeps working as usual inside apps and Settings; only Home's own Back
          press changes. Off by default (Back does nothing on Home); a theme can set "back_opens_clock": true. -->
     <bool name="back_opens_clock">false</bool>
+    <!-- One quiet focus state: no glass highlight, no pill behind the top bar's icons and no highlighted row in the
+         Inputs menu (it gets a flat dark panel instead). A focused tile, icon or row only grows a little with a short
+         ease, and tile names stay hidden. Use it with icon_only_buttons and icon_only_inputs for bare icons. Off by
+         default; a theme can set "quiet_focus": true. -->
+    <bool name="quiet_focus">false</bool>
+    <!-- Home fades to black a moment before the TV's own screensaver (Settings > Screen saver) is due, so the
+         screensaver comes in over black instead of over the home screen; any key brings Home straight back. Only
+         one timer, while Home is on screen. Off by default; a theme can set "idle_fade": true. -->
+    <bool name="idle_fade">false</bool>
+    <!-- Left at a row's first tile goes to its last, Right at its last to its first, and the same along the top bar's
+         buttons, instead of stopping at the edge. Up and Down are unchanged. Off by default; a theme can set
+         "wrap_rows": true. -->
+    <bool name="wrap_rows">false</bool>
+    <!-- Home lands on the tile last used rather than going back to the first dock tile. Off by default; a theme can
+         set "home_keeps_focus": true. -->
+    <bool name="home_keeps_focus">false</bool>
+    <!-- The weather now under the clock: an outline icon and the temperature, from an app that answers this content
+         URI with the columns temperature and icon (a drawable name in that app). The launcher keeps no network access:
+         the Weather add-on fetches, and only when asked. On Android 11 and later that app must also be visible to the
+         launcher (package visibility), which a fork adds to its manifest's queries. It is asked while Home is on screen, when
+         Home comes up and every 30 minutes, never in the background. For Berlin:
+         content://io.github.sumyabazar1.weather.now/now?lat=52.52&amp;lon=13.41
+         Empty by default, which asks nothing; a theme can set "weather_now". -->
+    <string name="weather_now" translatable="false"></string>
+    <!-- Home shows only the dock: its last slot becomes a More apps tile, and OK on it opens the other apps in rows
+         right under the dock (OK again, or Back, closes them). Needs dock_row. Off by default; a theme can set
+         "more_apps": true. -->
+    <bool name="more_apps">false</bool>
+    <!-- A row of shows under the dock, each opening its app straight at that show: "Name|package|uri|banner", the
+         uri sent to the package as a link (Netflix: https://www.netflix.com/title/<id>; Prime Video:
+         https://app.primevideo.com/detail?asin=<id>) and the artwork a banner_* drawable bundled with the launcher,
+         or empty for the name on a dark tile. A fifth part makes a shuffle tile: a uri with {id} in it and a
+         comma-separated list of ids, one picked at random on each press. A show whose app is not installed is left out. Empty by default; a
+         theme can set "show_tiles". -->
+    <string-array name="show_tiles" translatable="false">
+    </string-array>
+    <!-- Dock tiles as glass: a thin light edge and a white sheen fading out over their top half, drawn over the banner.
+         No blur: one small drawable per dock tile. Off by default; a theme can set "glass_tiles": true. -->
+    <bool name="glass_tiles">false</bool>
     <!-- The clock screensaver (Home idle clock and the system screensaver) over Home's wallpaper instead of black with
          a coloured glow. The clock still moves every minute. Can also be set with "clock_wallpaper" in a theme. -->
     <bool name="clock_wallpaper">false</bool>

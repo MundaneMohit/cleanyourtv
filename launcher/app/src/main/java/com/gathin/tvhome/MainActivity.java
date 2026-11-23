@@ -7,16 +7,20 @@ import android.app.Dialog;
 import android.content.ActivityNotFoundException;
 import android.content.BroadcastReceiver;
 import android.content.ComponentName;
+import android.content.ContentResolver;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.IntentFilter;
 import android.content.pm.PackageManager;
 import android.content.pm.ApplicationInfo;
+import android.content.pm.ProviderInfo;
 import android.content.pm.ResolveInfo;
 import android.content.pm.ChangedPackages;
 import android.content.res.ColorStateList;
 import android.content.res.Resources;
+import android.database.ContentObserver;
+import android.database.Cursor;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -58,6 +62,7 @@ import android.view.KeyEvent;
 import android.view.View;
 import android.view.SoundEffectConstants;
 import android.view.ViewGroup;
+import android.view.animation.DecelerateInterpolator;
 import android.view.ViewTreeObserver;
 import android.view.Window;
 import android.view.animation.AnimationUtils;
@@ -74,6 +79,7 @@ import androidx.annotation.NonNull;
 import androidx.dynamicanimation.animation.FloatPropertyCompat;
 import androidx.dynamicanimation.animation.SpringAnimation;
 import androidx.dynamicanimation.animation.SpringForce;
+import androidx.recyclerview.widget.DefaultItemAnimator;
 import androidx.recyclerview.widget.GridLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
@@ -124,6 +130,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     /** Back on Home opens ClockActivity (config.xml, back_opens_clock). */
     private boolean backOpensClock;
     private final Runnable showIdleClock = () -> startActivity(new Intent(this, ClockActivity.class));
+    /** Home fades to black just before the TV's screensaver is due (config.xml, idle_fade). */
+    private boolean idleFade;
+    /** idle_fade: a black sheet over Home, added only once a fade starts, and whether it is showing. */
+    private View idleVeil;
+    private boolean idleFaded;
+    /** idle_fade: how long before the screensaver is due the fade starts, and how long it takes. */
+    private static final long IDLE_FADE_LEAD_MS = 3000, IDLE_FADE_MS = 2000;
+    private final Runnable fadeForScreensaver = this::fadeForScreensaver;
+    /** weather_now: where the weather comes from, the line under the clock, and how often Home asks while on screen. */
+    private Uri weatherUri;
+    private TextView weatherView;
+    private ContentObserver weatherObserver;
+    private static final long WEATHER_ASK_MS = 30 * MINUTE_MS;
+    private final Runnable weatherTick = this::askWeather;
     private String liveTvAction;
     private String liveTvInputId;
     /** The app library is on (config.xml, app_library): only then can the tile menu take an app off Home. */
@@ -459,6 +479,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         festive = festival.active(LocalDate.now());
         liveTvPkg = cfg.liveTvPackage;
         idleClockMs = cfg.homeIdleClockMinutes * MINUTE_MS;
+        idleFade = cfg.idleFade;
+        wrapRows = cfg.wrapRows;
+        homeKeepsFocus = cfg.homeKeepsFocus;
         backOpensClock = cfg.backOpensClock;
         bootToLiveTv = cfg.bootToLiveTv;
         openOnStartChoice = cfg.openOnStartChoice;
@@ -486,6 +509,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         sky.setIntensity(cfg.skyIntensity);
         glass = findViewById(R.id.glass);
         glass.setStyle(cfg.glassStyle);
+        quietFocus = cfg.quietFocus;
+        if (quietFocus) glass.setVisibility(View.GONE);
+        if (!cfg.weatherNow.isEmpty()) setUpWeather(Uri.parse(cfg.weatherNow));
         if (festive) glass.setAccent(festival.accentColor());
         ambient = findViewById(R.id.ambient);
         // The glow is one bitmap, so its alpha can be applied while drawing it. Otherwise every frame of
@@ -877,8 +903,13 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             int firstButton = btnInputs.getVisibility() == View.VISIBLE ? R.id.btnInputs : firstTopButton().getId();
             int leftButton = rtlMenuBar ? R.id.btnSettings : firstButton;
             int rightButton = rtlMenuBar ? firstButton : R.id.btnSettings;
-            if (keyCode == KeyEvent.KEYCODE_DPAD_LEFT) return v.getId() == leftButton;
-            return keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
+            boolean atEnd = keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? v.getId() == leftButton
+                    : keyCode == KeyEvent.KEYCODE_DPAD_RIGHT && v.getId() == rightButton;
+            if (atEnd && wrapRows) {
+                View other = findViewById(keyCode == KeyEvent.KEYCODE_DPAD_LEFT ? rightButton : leftButton);
+                if (other != null && other != v) other.requestFocus();
+            }
+            return atEnd;
         };
         btnInputs.setOnKeyListener(pillKeys);
         btnWifi.setOnKeyListener(pillKeys);
@@ -897,6 +928,25 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
         }
         if (festive) applyFestiveSkin((TextView) btnInputs, (TextView) btnSettings);
+        if (quietFocus) {
+            // Bare icons in the weather line's outline style instead of the filled glyphs (festive skins keep theirs).
+            if (!festive) {
+                ((TextView) btnInputs).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_input_line, 0, 0, 0);
+                if (!launcherSettingsButton && !topMenu) {
+                    ((TextView) btnSettings).setCompoundDrawablesRelativeWithIntrinsicBounds(R.drawable.ic_settings_line, 0, 0, 0);
+                }
+            }
+            List<View> bare = new ArrayList<>(Arrays.asList(btnInputs, btnWifi, btnVpn, btnReorder, btnLibraryTop, btnSettings));
+            bare.addAll(topAppButtons);
+            for (View button : bare) {
+                button.setOnFocusChangeListener(null);
+                if (button instanceof TextView) Quiet.button((TextView) button);
+                else {
+                    button.setBackground(null);
+                    button.setStateListAnimator(Quiet.grow());
+                }
+            }
+        }
 
         // Hide the glass when focus leaves the tiles.
         getWindow().getDecorView().getViewTreeObserver().addOnGlobalFocusChangeListener((oldF, newF) -> {
@@ -1000,15 +1050,24 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         if (openInputsIfAsked(intent)) return;
         if (intent == null || !intent.hasCategory(Intent.CATEGORY_HOME)) return;
         if (gameDay != null && !stopped) gameDay.read();
-        grid.scrollToPosition(0);
-        lastFocused = 0;
-        lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
+        // more_apps: Home closes the other apps; a tile that was one of them gives way to More apps.
+        if (adapter.closeMore() && lastFocused >= COLUMNS) {
+            lastFocused = COLUMNS - 1;
+            lastFocusedKey = adapter.keyAt(lastFocused);
+        }
+        // home_keeps_focus: Home returns to the tile last used, so nothing is reset here.
+        if (!homeKeepsFocus) {
+            grid.scrollToPosition(0);
+            lastFocused = 0;
+            lastFocusedKey = adapter.getItemCount() > 0 ? adapter.keyAt(0) : null;
+        }
         if (stopped) {
             tileRefresh.onHomeAgain();
         } else {
             // Still on screen (the quick panel was over it, or Home was already in front): the tiles are current,
             // so only go back to the first one; rebuilding would replay the entrance animation for nothing.
-            grid.post(() -> focusTile(0));
+            int slot = homeKeepsFocus ? Math.max(0, Math.min(lastFocused, adapter.appCount() - 1)) : 0;
+            grid.post(() -> focusTile(slot));
         }
     }
 
@@ -1043,6 +1102,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             return;
         }
         restartIdleClock();
+        showHomeAgain(false);
+        restartIdleFade();
+        startWeather();
         promptsPaused = false;
         if (grid.getAdapter() == null) grid.setAdapter(adapter);   // dropped by onTrimMemory
         switch (tileRefresh.onResume(packagesChangedSinceRebuild())) {
@@ -1232,6 +1294,134 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onUserInteraction() {
         super.onUserInteraction();
         restartIdleClock();
+        restartIdleFade();
+    }
+
+    /**
+     * idle_fade: counts down to a moment before the TV starts its screensaver, which happens when the screen-off
+     * timeout passes with no input. Nothing is scheduled while Home is not on screen or screensavers are off.
+     */
+    private void restartIdleFade() {
+        root.removeCallbacks(fadeForScreensaver);
+        if (!resumed || !idleFade) return;
+        ContentResolver cr = getContentResolver();
+        if (Settings.Secure.getInt(cr, "screensaver_enabled", 1) == 0) return;
+        long timeout = Settings.System.getLong(cr, Settings.System.SCREEN_OFF_TIMEOUT, 0L);
+        if (timeout > IDLE_FADE_LEAD_MS) root.postDelayed(fadeForScreensaver, timeout - IDLE_FADE_LEAD_MS);
+    }
+
+    /** weather_now: an icon and the temperature under the clock, hidden until the first reading comes. */
+    private void setUpWeather(Uri uri) {
+        weatherUri = uri;
+        weatherView = new TextView(this);
+        weatherView.setTextColor(0xE6FFFFFF);
+        weatherView.setTextSize(TypedValue.COMPLEX_UNIT_SP, 18);
+        weatherView.setTypeface(UiFont.get(this, R.string.font_light));
+        weatherView.setIncludeFontPadding(false);
+        weatherView.setGravity(Gravity.CENTER_VERTICAL);
+        weatherView.setCompoundDrawablePadding(Math.round(8 * density));
+        weatherView.setVisibility(View.GONE);
+        // Beside the clock block, not inside it: the top bar's buttons line up with that block's bottom edge.
+        View clockBlock = findViewById(R.id.leftBlock);
+        RelativeLayout.LayoutParams lp = new RelativeLayout.LayoutParams(
+                ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.addRule(RelativeLayout.BELOW, R.id.leftBlock);
+        lp.addRule(RelativeLayout.ALIGN_START, R.id.leftBlock);
+        lp.topMargin = Math.round(4 * density);
+        ((ViewGroup) clockBlock.getParent()).addView(weatherView, lp);
+        weatherObserver = new ContentObserver(new Handler(Looper.getMainLooper())) {
+            @Override
+            public void onChange(boolean selfChange) {
+                askWeather();
+            }
+        };
+    }
+
+    /** Home is on screen: listen for a new reading and ask now. The source fetches only when its reading is old. */
+    private void startWeather() {
+        if (weatherUri == null) return;
+        try {
+            getContentResolver().registerContentObserver(
+                    new Uri.Builder().scheme("content").authority(weatherUri.getAuthority()).build(), true, weatherObserver);
+        } catch (RuntimeException e) {
+            return;   // the add-on is not installed
+        }
+        askWeather();
+    }
+
+    private void stopWeather() {
+        if (weatherUri == null) return;
+        root.removeCallbacks(weatherTick);
+        getContentResolver().unregisterContentObserver(weatherObserver);
+    }
+
+    /** One short query off the main thread (the add-on may have to start), then the line is updated. */
+    private void askWeather() {
+        root.removeCallbacks(weatherTick);
+        if (!resumed || weatherUri == null) return;
+        root.postDelayed(weatherTick, WEATHER_ASK_MS);
+        final Uri uri = weatherUri;
+        new Thread(() -> {
+            String text = null;
+            Drawable icon = null;
+            try (Cursor c = getContentResolver().query(uri, null, null, null, null)) {
+                if (c != null && c.moveToFirst()) {
+                    text = c.getInt(c.getColumnIndexOrThrow("temperature")) + "°";
+                    String iconName = c.getString(c.getColumnIndexOrThrow("icon"));
+                    ProviderInfo source = getPackageManager().resolveContentProvider(uri.getAuthority(), 0);
+                    if (source != null && iconName != null) {
+                        Resources res = getPackageManager().getResourcesForApplication(source.packageName);
+                        int id = res.getIdentifier(iconName, "drawable", source.packageName);
+                        if (id != 0) icon = res.getDrawable(id, null);
+                    }
+                }
+            } catch (Exception ignored) {
+                // No add-on, or it answered nothing usable: the line stays as it was.
+            }
+            final String shown = text;
+            final Drawable shownIcon = icon;
+            runOnUiThread(() -> {
+                if (weatherView == null) return;
+                if (shown == null) {
+                    weatherView.setVisibility(View.GONE);
+                    return;
+                }
+                if (shownIcon != null) {
+                    int side = Math.round(22 * density);
+                    shownIcon.setBounds(0, 0, side, side);
+                }
+                weatherView.setCompoundDrawablesRelative(shownIcon, null, null, null);
+                weatherView.setText(shown);
+                weatherView.setVisibility(View.VISIBLE);
+            });
+        }, "weather").start();
+    }
+
+    private void fadeForScreensaver() {
+        if (idleVeil == null) {
+            idleVeil = new View(this);
+            idleVeil.setBackgroundColor(Color.BLACK);
+            idleVeil.setFocusable(false);
+            idleVeil.setImportantForAccessibility(View.IMPORTANT_FOR_ACCESSIBILITY_NO);
+        }
+        if (idleVeil.getParent() == null) root.addView(idleVeil, new FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT));
+        idleVeil.bringToFront();
+        idleFaded = true;
+        idleVeil.setAlpha(0f);
+        idleVeil.animate().alpha(1f).setDuration(IDLE_FADE_MS).setInterpolator(new DecelerateInterpolator()).start();
+    }
+
+    /** Lifts the idle_fade sheet: quickly when a key or the screensaver ending brings Home back, at once otherwise. */
+    private void showHomeAgain(boolean animate) {
+        if (!idleFaded || idleVeil == null) return;
+        idleFaded = false;
+        idleVeil.animate().cancel();
+        if (animate) {
+            idleVeil.animate().alpha(0f).setDuration(250).withEndAction(() -> root.removeView(idleVeil)).start();
+        } else {
+            root.removeView(idleVeil);
+        }
     }
 
     private void restartIdleClock() {
@@ -1248,6 +1438,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         RemoteKeys.release(this);
         cancelHoldOk();
         root.removeCallbacks(showIdleClock);
+        root.removeCallbacks(fadeForScreensaver);
+        showHomeAgain(false);
+        stopWeather();
         endReorder();   // Home or another app while reordering keeps the order so far
         wallpaperPlayer.stop();
         stopAmbientAnimation();
@@ -1304,6 +1497,9 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     public void onWindowFocusChanged(boolean hasFocus) {
         super.onWindowFocusChanged(hasFocus);
         if (hasFocus) {
+            // The screensaver ended (any key wakes it): Home comes back from black.
+            showHomeAgain(true);
+            restartIdleFade();
             startPendingSettingsReorder();
             if (libraryFocusPending && appLibrary == null) focusLibrary();
             showCardPrompt();
@@ -1361,6 +1557,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
      */
     @Override
     public boolean dispatchKeyEvent(KeyEvent event) {
+        // idle_fade: the first key on a faded Home only brings it back, so nothing opens unseen.
+        if (idleFaded && event.getAction() == KeyEvent.ACTION_DOWN) {
+            showHomeAgain(true);
+            restartIdleFade();
+            return true;
+        }
         // Vendor keys (TCL Netflix button, 4062) never reach the key services, only the focused window, so their
         // "hold:" entries run here too or nowhere. Only while resumed: onPause releases Home's holds, and a DOWN
         // taken after that would arm one nothing releases.
@@ -1695,8 +1897,30 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     @Override
     @SuppressWarnings("deprecation")
     public void onBackPressed() {
+        // more_apps: Back first closes the other apps, back onto the More apps tile.
+        if (adapter.closeMore()) {
+            grid.post(() -> focusTile(COLUMNS - 1));
+            return;
+        }
         // Home screen: Back goes nowhere, unless back_opens_clock is on.
         if (backOpensClock) startActivity(new Intent(this, ClockActivity.class));
+    }
+
+    /** more_apps: OK on More apps opens the other apps under the dock and moves onto the first; OK again closes them. */
+    @Override
+    public void onMoreApps() {
+        // The grid runs without an item animator (setItemAnimator(null) above); only this unfold animates, briefly.
+        if (animations && !reducedMotion) {
+            DefaultItemAnimator unfold = new DefaultItemAnimator();
+            unfold.setAddDuration(UNFOLD_MS);
+            unfold.setRemoveDuration(UNFOLD_MS);
+            unfold.setMoveDuration(UNFOLD_MS);
+            unfold.setChangeDuration(0);
+            grid.setItemAnimator(unfold);
+            grid.postDelayed(() -> grid.setItemAnimator(null), UNFOLD_MS * 2 + 100);
+        }
+        boolean open = adapter.toggleMore();
+        grid.post(() -> focusTile(open && adapter.appCount() > COLUMNS ? COLUMNS : COLUMNS - 1));
     }
 
     // ---- glass highlight -------------------------------------------------------------------------
@@ -2379,10 +2603,22 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
                 focusLibrary();
                 return true;
             }
-            // In the dock, the last app is the row's end: the empty slots after it take no focus.
-            int rowCount = position < COLUMNS ? Math.min(count, adapter.dockFilled()) : count;
-            return GridNavigation.atHorizontalEdge(position, rowCount, COLUMNS,
+            // A row's last tile is its end: empty slots after it (the dock's free ones, or a short row under it with
+            // more_apps) take no focus.
+            int rowStart = position / COLUMNS * COLUMNS;
+            int rowCount = adapter.rowEnd(position);
+            boolean edge = GridNavigation.atHorizontalEdge(position, rowCount, COLUMNS,
                     rtlAppGrid, keyCode == KeyEvent.KEYCODE_DPAD_LEFT);
+            if (edge && wrapRows) {
+                // wrap_rows: round to the row's other end, as on a ring.
+                int rowEnd = Math.min(rowStart + COLUMNS, rowCount) - 1;
+                if (rowEnd > rowStart) {
+                    focusTile(forward ? rowStart : rowEnd);
+                    grid.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_LEFT
+                            ? SoundEffectConstants.NAVIGATION_LEFT : SoundEffectConstants.NAVIGATION_RIGHT);
+                }
+            }
+            return edge;
         }
         if (keyCode == KeyEvent.KEYCODE_DPAD_UP) {
             if (position < COLUMNS) return false;          // dock row: let focus move to the top bar
@@ -2395,6 +2631,11 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
             }
             target = Math.min(position + COLUMNS, count - 1);
         }
+        // Onto a short row: its last tile when the column below or above is an empty slot.
+        int targetRowStart = target / COLUMNS * COLUMNS;
+        int targetEnd = adapter.rowEnd(target);
+        if (targetEnd <= targetRowStart) return true;
+        if (target >= targetEnd) target = targetEnd - 1;
         focusTile(target);
         // The default focus search clicks for Left/Right; Up/Down are handled here, so click for them too.
         grid.playSoundEffect(keyCode == KeyEvent.KEYCODE_DPAD_UP
@@ -2934,7 +3175,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         } else {
             if (icon != wifiIcon) {
                 wifiIcon = icon;
-                btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(icon, 0, 0, 0);
+                btnWifi.setCompoundDrawablesRelativeWithIntrinsicBounds(quietIcon(icon), 0, 0, 0);
             }
             ColorStateList tint = online ? wifiOnlineTint : wifiPlainTint;
             // wifi_status_warnings: orange while connected but not validated (a captive portal), red while offline.
@@ -2945,6 +3186,20 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         }
     }
 
+    /** config.xml quiet_focus: no glass highlight or pill backgrounds; focus only grows. */
+    private boolean quietFocus;
+
+    /** quiet_focus: the network icons in the top bar's outline style. */
+    private int quietIcon(int icon) {
+        if (!quietFocus) return icon;
+        if (icon == R.drawable.ic_wifi) return R.drawable.ic_wifi_line;
+        if (icon == R.drawable.ic_ethernet) return R.drawable.ic_ethernet_line;
+        return icon;
+    }
+    /** more_apps: how long the other apps take to unfold or fold (ms). */
+    private static final long UNFOLD_MS = 220;
+    /** config.xml wrap_rows and home_keeps_focus. */
+    private boolean wrapRows, homeKeepsFocus;
     /** config.xml icon_only_buttons. */
     private boolean iconOnlyButtons;
     /** config.xml top_menu: Inputs, Wi-Fi and Settings folded into one gear. */
@@ -3501,6 +3756,12 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
         popup.setWidth(Math.max(width, Math.min(panel.getMeasuredWidth(), (int) (360 * density))));
 
         int alignment = getResources().getBoolean(R.bool.rtl_menu_bar) != underGear ? Gravity.END : Gravity.START;
+        if (quietFocus && !underGear) {
+            // A bare icon is narrow, so a list hung from its left edge runs off the screen: hang it from the end of
+            // the row of icons instead, growing inward, as under the gear.
+            anchor = findViewById(R.id.btnSettings);
+            alignment = getResources().getBoolean(R.bool.rtl_menu_bar) ? Gravity.START : Gravity.END;
+        }
         dropIn(popup, panel, anchor, alignment);
         for (int i = 0; i < rows.getChildCount(); i++) {
             View child = rows.getChildAt(i);
@@ -3514,6 +3775,7 @@ public class MainActivity extends Activity implements AppAdapter.TileListener {
     }
 
     private PopupWindow glassPopup(View panel, int width) {
+        if (quietFocus && panel instanceof ViewGroup) Quiet.panel((ViewGroup) panel, density);
         final PopupWindow popup = new PopupWindow(panel, width, ViewGroup.LayoutParams.WRAP_CONTENT, true);
         popup.setBackgroundDrawable(new ColorDrawable(Color.TRANSPARENT));   // needed for Back to dismiss
         popup.setOutsideTouchable(true);

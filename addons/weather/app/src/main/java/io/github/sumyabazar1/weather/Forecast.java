@@ -136,6 +136,17 @@ final class Forecast {
                 (int) Math.round(humidity), (int) Math.round(current.optDouble("wind_speed_10m", 0)));
     }
 
+    /** The temperature now (°C), its WMO code and whether it is day, for the launcher's top line (NowProvider). */
+    static double[] now(double latitude, double longitude) throws IOException, JSONException {
+        String where = String.format(Locale.ROOT, "latitude=%.4f&longitude=%.4f", latitude, longitude);
+        JSONObject current = get("https://api.open-meteo.com/v1/forecast?" + where + "&models=icon_seamless"
+                + "&current=temperature_2m,relative_humidity_2m,weather_code,is_day&timezone=auto")
+                .getJSONObject("current");
+        double temp = current.getDouble("temperature_2m");
+        int code = snowIfCold(current.getInt("weather_code"), temp, current.getDouble("relative_humidity_2m"));
+        return new double[]{temp, code, current.getInt("is_day")};
+    }
+
     /**
      * The models type precipitation by the air temperature, and around freezing they call rain what reaches the
      * ground as snow (ICON and GFS: "light rain" at 1 °C in a Ulaanbaatar blizzard). The wet-bulb temperature,

@@ -135,4 +135,21 @@ public class WallpaperRotationTest {
         for (int i = 0; i < out.length; i++) out[i] = files.get(i).getName();
         return Arrays.asList(out);
     }
+
+    @Test
+    public void clockOrderChangesOnTheHalfHourAndIgnoresWhatHappenedBefore() {
+        List<File> images = Arrays.asList(new File("a.jpg"), new File("b.jpg"), new File("c.jpg"));
+        long half = 30 * 60_000L;
+        long offset = 60 * 60_000L;   // UTC+1
+        long slot = 1_000_000L * half - offset;   // a local :00
+        assertEquals(WallpaperRotation.byClock(images, slot, offset, half),
+                WallpaperRotation.byClock(images, slot + half - 1, offset, half));
+        assertNotEquals(WallpaperRotation.byClock(images, slot, offset, half),
+                WallpaperRotation.byClock(images, slot + half, offset, half));
+        // three slots later, round the list: the same picture again
+        assertEquals(WallpaperRotation.byClock(images, slot, offset, half),
+                WallpaperRotation.byClock(images, slot + 3 * half, offset, half));
+        assertTrue(WallpaperRotation.validOrder(WallpaperRotation.ORDER_CLOCK));
+        assertNull(WallpaperRotation.byClock(Collections.emptyList(), slot, offset, half));
+    }
 }

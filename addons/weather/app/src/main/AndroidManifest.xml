@@ -30,5 +30,12 @@
             </intent-filter>
             <meta-data android:name="com.gathin.tvhome.card" android:resource="@xml/module_card" />
         </activity>
+
+        <!-- The temperature and an outline icon for one place, for a home screen that shows them without network access
+             of its own (Clean Your TV's weather_now). It fetches only when asked, at most every 30 minutes. -->
+        <provider
+            android:name=".NowProvider"
+            android:authorities="io.github.sumyabazar1.weather.now"
+            android:exported="true" />
     </application>
 </manifest>

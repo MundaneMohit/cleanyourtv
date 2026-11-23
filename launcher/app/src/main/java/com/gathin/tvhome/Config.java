@@ -134,6 +134,22 @@ final class Config {
     final boolean iconOnlyVpn;
     /** Back on the Home screen opens the clock screensaver instead of doing nothing (config.xml / theme back_opens_clock). */
     final boolean backOpensClock;
+    /** No glass highlight, no pill or row backgrounds: a focused tile, icon or row only grows (config.xml / theme quiet_focus). */
+    final boolean quietFocus;
+    /** Home fades to black just before the TV's screensaver starts, and back on any key (config.xml / theme idle_fade). */
+    final boolean idleFade;
+    /** Left/Right at a row's end, or at the top bar's, go round to its other end (config.xml / theme wrap_rows). */
+    final boolean wrapRows;
+    /** Home lands on the tile last used instead of the first one (config.xml / theme home_keeps_focus). */
+    final boolean homeKeepsFocus;
+    /** A content URI that answers the weather now (temperature, icon), shown under the clock; empty is off (weather_now). */
+    final String weatherNow;
+    /** The dock's last slot opens the other apps below it; Home shows only the dock otherwise (more_apps). */
+    final boolean moreApps;
+    /** Shows a tile opens straight to, as "Name|package|uri|banner_name" (show_tiles); a row under the dock. */
+    final List<String> showTiles;
+    /** Dock tiles as glass: a light edge and a sheen over their top half (glass_tiles). */
+    final boolean glassTiles;
     /** App library as a round button in the top bar (config.xml library_button); needs app_library. */
     final boolean libraryButton;
     /** The App library pill after the last Home row; false hides it while libraryButton is on (show_library_pill). */
@@ -286,7 +302,9 @@ final class Config {
                    boolean keyFilter, boolean dockGlass, String glowStyle, boolean wallpaperCaptions,
                    boolean handleViewInputs, boolean tileMenu, boolean dockEvenPadding, boolean dockBand, boolean cinematicDots, boolean cinematicWhiteFocus, boolean wifiStatusColor, int cinematicScrim, int cinematicArt,
                    Map<String, Set<String>> wallpaperMoods, boolean gamepadPassthrough, boolean consumeVolumeKeys, boolean powerOnHome, boolean homeLongPressHome, boolean wifiStatusWarnings, List<String> topBarApps, boolean showGreeting, boolean headerWhite, boolean clockWallpaper, int clockWallpaperDim, boolean clockGlow, String glassStyle, boolean singleRow, boolean dockBandAll, boolean lunarDate, int lunarUtcOffset, boolean dateBelowClock, boolean vpnPill, String locale, boolean powerOnHomeAlways, boolean inputsConnectedOnly,
-                   int openOnStartNetworkWait, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock) {
+                   int openOnStartNetworkWait, boolean iconOnlyVpn, String clockFormat, boolean backOpensClock,
+                   boolean quietFocus, boolean idleFade, boolean wrapRows, boolean homeKeepsFocus, String weatherNow,
+                   boolean moreApps, List<String> showTiles, boolean glassTiles) {
         this.handleViewInputs = handleViewInputs;
         this.tileMenu = tileMenu;
         this.inputKeycodes = inputKeycodes;
@@ -337,6 +355,14 @@ final class Config {
         this.iconOnlyInputs = iconOnlyInputs;
         this.iconOnlyVpn = iconOnlyVpn;
         this.backOpensClock = backOpensClock;
+        this.quietFocus = quietFocus;
+        this.idleFade = idleFade;
+        this.wrapRows = wrapRows;
+        this.homeKeepsFocus = homeKeepsFocus;
+        this.weatherNow = weatherNow;
+        this.moreApps = moreApps;
+        this.showTiles = Collections.unmodifiableList(showTiles);
+        this.glassTiles = glassTiles;
         this.libraryButton = libraryButton;
         this.showLibraryPill = showLibraryPill;
         this.wifiLabelWidth = wifiLabelWidth;
@@ -464,6 +490,14 @@ final class Config {
         boolean iconOnlyInputs = res.getBoolean(R.bool.icon_only_inputs);
         boolean iconOnlyVpn = res.getBoolean(R.bool.icon_only_vpn);
         boolean backOpensClock = res.getBoolean(R.bool.back_opens_clock);
+        boolean quietFocus = res.getBoolean(R.bool.quiet_focus);
+        boolean idleFade = res.getBoolean(R.bool.idle_fade);
+        boolean wrapRows = res.getBoolean(R.bool.wrap_rows);
+        boolean homeKeepsFocus = res.getBoolean(R.bool.home_keeps_focus);
+        String weatherNow = res.getString(R.string.weather_now);
+        boolean moreApps = res.getBoolean(R.bool.more_apps);
+        List<String> showTiles = new ArrayList<>(Arrays.asList(res.getStringArray(R.array.show_tiles)));
+        boolean glassTiles = res.getBoolean(R.bool.glass_tiles);
         boolean libraryButton = res.getBoolean(R.bool.library_button);
         boolean showLibraryPill = res.getBoolean(R.bool.show_library_pill);
         int wifiLabelWidth = res.getInteger(R.integer.wifi_label_width);
@@ -575,6 +609,14 @@ final class Config {
             iconOnlyInputs = bool(json, "icon_only_inputs", iconOnlyInputs);
             iconOnlyVpn = bool(json, "icon_only_vpn", iconOnlyVpn);
             backOpensClock = bool(json, "back_opens_clock", backOpensClock);
+            quietFocus = bool(json, "quiet_focus", quietFocus);
+            idleFade = bool(json, "idle_fade", idleFade);
+            wrapRows = bool(json, "wrap_rows", wrapRows);
+            homeKeepsFocus = bool(json, "home_keeps_focus", homeKeepsFocus);
+            weatherNow = string(json, "weather_now", weatherNow);
+            moreApps = bool(json, "more_apps", moreApps);
+            showTiles = stringList(json, "show_tiles", showTiles);
+            glassTiles = bool(json, "glass_tiles", glassTiles);
             libraryButton = bool(json, "library_button", libraryButton);
             showLibraryPill = bool(json, "show_library_pill", showLibraryPill);
             wifiLabelWidth = integer(json, "wifi_label_width", wifiLabelWidth, 0, 300);
@@ -700,7 +742,9 @@ final class Config {
                 consumeVolumeKeys, powerOnHome, homeLongPressHome, wifiStatusWarnings, topBarApps, showGreeting, headerWhite, clockWallpaper,
                 Math.max(0, Math.min(90, clockWallpaperDim)), clockGlow, glassStyle, singleRow && dockRow, dockBandAll, lunar, lunarOffset,
                 dateBelowClock, vpnPill, locale, powerOnHomeAlways, inputsConnectedOnly,
-                Math.max(0, Math.min(600, openOnStartNetworkWait)), iconOnlyVpn, clockFormat, backOpensClock);
+                Math.max(0, Math.min(600, openOnStartNetworkWait)), iconOnlyVpn, clockFormat, backOpensClock,
+                quietFocus, idleFade, wrapRows, homeKeepsFocus, weatherNow.startsWith("content://") ? weatherNow : "",
+                moreApps && dockRow && !singleRow, showTiles, glassTiles);
     }
 
     /**

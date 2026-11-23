@@ -1,0 +1,3 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- NowProvider names these icons for another app to load, so nothing here references them: keep them. -->
+<resources xmlns:tools="http://schemas.android.com/tools" tools:keep="@drawable/wx_*" />

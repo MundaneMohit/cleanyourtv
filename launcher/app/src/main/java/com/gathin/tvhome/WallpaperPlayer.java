@@ -106,7 +106,9 @@ final class WallpaperPlayer {
     private void showFirst() {
         String previous = preferences.getString("image", "");
         List<File> playable = playable();
-        File first = WallpaperRotation.find(playable, previous);
+        File first = clock() ? clockPick(playable) : WallpaperRotation.find(playable, previous);
+        if (first == null) first = counterpart(previous, playable);
+        boolean swapped = first != null;
         if (first == null) first = WallpaperRotation.pick(playable, previous, order, random);
         while (first != null) {
             Bitmap bitmap = decode(first);
@@ -117,8 +119,10 @@ final class WallpaperPlayer {
                 displayed = first.getName();
                 showCaption(false);
                 if (!displayed.equals(previous)) {
-                    preferences.edit().putString("image", displayed)
-                            .putLong("changed", System.currentTimeMillis()).apply();
+                    // The same place in the other time of day's group keeps the rotation's clock.
+                    SharedPreferences.Editor edit = preferences.edit().putString("image", displayed);
+                    if (!swapped) edit.putLong("changed", System.currentTimeMillis());
+                    edit.apply();
                 }
                 return;
             }
@@ -148,6 +152,31 @@ final class WallpaperPlayer {
         root.setBackgroundColor(backgroundColor);
     }
 
+    /** wallpaper_order "clock": the picture follows the time of day, not how long Home has been on screen. */
+    private boolean clock() {
+        return WallpaperRotation.ORDER_CLOCK.equals(order);
+    }
+
+    private File clockPick(List<File> playable) {
+        long now = System.currentTimeMillis();
+        return WallpaperRotation.byClock(playable, now, java.util.TimeZone.getDefault().getOffset(now), interval);
+    }
+
+    /**
+     * wallpaper_moods: the picture at {@code previous}'s place in its own time of day's group, taken from
+     * {@code playable} (the group for now); null without moods or when {@code previous} is in no group.
+     */
+    private File counterpart(String previous, List<File> playable) {
+        if (moods.isEmpty() || previous.isEmpty() || playable.isEmpty()) return null;
+        for (String mood : WallpaperMood.ALL) {
+            List<File> group = WallpaperMood.select(files, moods, mood);
+            for (int i = 0; i < group.size(); i++) {
+                if (group.get(i).getName().equals(previous)) return playable.get(i % playable.size());
+            }
+        }
+        return null;
+    }
+
     /** The pictures the rotation picks from now: wallpaper_moods' group for the time of day, or the whole collection. */
     private List<File> playable() {
         if (moods.isEmpty()) return files;
@@ -172,9 +201,22 @@ final class WallpaperPlayer {
         List<File> playable = playable();
         File selected = WallpaperRotation.find(playable, previous);
         long changed = preferences.getLong("changed", 0);
-        if (selected == null || WallpaperRotation.due(changed, System.currentTimeMillis(), interval)) {
-            selected = WallpaperRotation.pick(playable, previous, order, random);
+        // The time of day changed (morning, evening, night): continue at the same place in the new group, so a
+        // collection whose groups start alike does not fall back to its first picture at every switch.
+        boolean swapped = false;
+        if (selected == null) {
+            selected = counterpart(previous, playable);
+            swapped = selected != null;
         }
+        boolean due = WallpaperRotation.due(changed, System.currentTimeMillis(), interval);
+        if (clock()) {
+            selected = clockPick(playable);
+            swapped = false;
+        } else if (selected == null || due) {
+            selected = WallpaperRotation.pick(playable, selected != null ? selected.getName() : previous, order, random);
+            swapped = false;
+        }
+        final boolean keepClock = swapped;
         if (selected == null || selected.getName().equals(displayed)) return;
         File next = selected;
         loading = true;
@@ -196,8 +238,9 @@ final class WallpaperPlayer {
                 displayed = next.getName();
                 showCaption(true);
                 if (!displayed.equals(previous) || changed == 0) {
-                    preferences.edit().putString("image", displayed)
-                            .putLong("changed", System.currentTimeMillis()).apply();
+                    SharedPreferences.Editor edit = preferences.edit().putString("image", displayed);
+                    if (!keepClock || changed == 0) edit.putLong("changed", System.currentTimeMillis());
+                    edit.apply();
                 }
             });
         });
